@@ -1,0 +1,75 @@
+# copybot configuration. Validated by copybot/config.py at startup — unknown keys are an error.
+# Percentages are written as whole numbers (5 = 5%) unless the key name says "ratio".
+
+schedule:
+  poll_minutes: 5            # Minutes between polls. Must match the cron-job.org interval (§3.2). Default 5.
+
+portfolio:
+  start_equity: 10000        # Starting paper equity in USD for each of the three portfolios. Default 10000.
+  copy_multiplier: 1.0       # Scales every copied target notional (1.0 = mirror trader's exposure fraction). Default 1.0.
+
+selection:
+  n_follow: 5                # Number of traders to follow (N). Default 5.
+  stage2_pool: 150           # Max stage-1 survivors (by month PnL) passed to deep analytics. Default 150.
+  lookback_days: 90          # Days of fills/portfolio history analysed per candidate. Default 90.
+  min_account_value: 100000  # Min leaderboard accountValue in USD. Default 100000.
+  min_month_volume: 1000000  # Min 30-day traded volume in USD (proves they actually trade). Default 1000000.
+  max_turnover_ratio: 200    # Max month volume / accountValue; above this looks like MM/HFT. Default 200.
+  max_trades_per_day: 30     # Exclude traders faster than this (round trips/day). Default 30.
+  min_median_holding_hours: 4      # effective value = max(this, 12 * poll_minutes / 60). Default 4.
+  max_maker_ratio: 0.6       # Max share of fills that were maker (crossed=false); above = likely MM. Default 0.6.
+  max_drawdown_pct: 40       # Max 90-day drawdown of the trader's account, % of peak. Default 40.
+  max_top_trade_concentration: 0.5  # Max (largest round-trip PnL / total positive PnL). Default 0.5.
+  min_positive_weeks_ratio: 0.5     # Min share of last 12 weeks with positive PnL. Default 0.5.
+  min_active_days_30: 8      # Min days with at least one fill in the last 30. Default 8.
+  max_leverage_seen: 25      # Exclude if trader ever used more leverage than this. Default 25.
+  min_round_trips: 20        # Min completed round trips in the lookback (evidence). Default 20.
+  max_subaccount_value_share: 0.5  # Exclude if more than this share of equity is in sub-accounts (D1). Default 0.5.
+  max_fill_pages: 5          # Max 2000-fill pages per candidate; hitting it = too active to copy (D2). Default 5.
+  min_copy_capture_ratio: 0.4  # Min (simulated copy return / trader return). Default 0.4.
+  # Composite score weights (§6.5). Defaults: 0.35 / 0.25 / 0.20 / 0.10 / 0.10.
+  weights: {copy_return: 0.35, return_to_drawdown: 0.25, positive_weeks: 0.20, capture: 0.10, low_leverage: 0.10}
+  keep_if_rank_within: 10    # A followed wallet stays while ranked within this (2N). Default 10.
+  max_replacements_per_day: 2  # Max followed-wallet swaps per refresh. Default 2.
+  blocklist: []              # Addresses never to follow (lowercase 0x...). Default empty.
+
+signals:
+  rebalance_threshold_pct: 10   # Ignore target changes smaller than this % of current copied size... Default 10.
+  rebalance_threshold_usd: 15   # ...or smaller than this USD notional, whichever is larger. Default 15.
+  max_entry_drift_pct: 1.5      # Skip OPEN/INCREASE if price already moved this % in trader's favour. Default 1.5.
+  disappear_confirm_polls: 1    # Extra polls to wait before closing a position that vanished without fills. Default 1.
+
+risk:
+  max_position_pct: 20       # Max |notional| of one copied position, % of total equity. Default 20.
+  max_gross_leverage: 3      # Max gross exposure / equity; new targets scaled down above this. Default 3.
+  max_coin_pct: 35           # Max net exposure per coin across all sleeves, % of equity. Default 35.
+  max_position_leverage: 5   # Max effective leverage per position, regardless of trader. Default 5.
+  daily_loss_stop_pct: 5     # Close all + pause until next UTC day if equity drops this % from day start. Default 5.
+  max_drawdown_stop_pct: 25  # Close all + pause until `unkill` if equity drops this % from peak. Default 25.
+
+costs:
+  taker_fee_bps: 4.5          # verify current rate. Taker fee on every paper order, basis points. Default 4.5.
+  extra_slippage_bps: 2       # Added on top of order-book slippage for execution latency. Default 2.
+  fallback_slippage_bps: 10   # Slippage used when the order book can't be fetched. Default 10.
+  backtest_slippage_bps: 8    # Fixed slippage in backtests and the copyability simulation. Default 8.
+
+email:
+  max_alerts_per_type_per_hour: 1  # Rate limit per alert type. Default 1.
+  max_alerts_per_day: 6            # Total alert emails per day (invariant/live alerts exempt). Default 6.
+  timezone_display: Europe/Lisbon  # Timezone used only for display in emails. Default Europe/Lisbon.
+
+live:
+  enabled: false              # MASTER SWITCH. Ships false. Only the owner changes this, manually (§11).
+  network: null               # must be set explicitly to testnet or mainnet. Default null (= refuse).
+  mainnet_confirmed: false    # Extra confirmation required for mainnet. Default false.
+  require_readiness: true     # Block live until §11.1 readiness criteria are met. Default true.
+  override_acknowledged: ""   # Required exact sentence to override readiness (§11.1). Default "".
+  max_account_equity_usd: 500  # Refuse to trade an account holding more than this. Default 500.
+  capital_fraction: 1.0       # Fraction of live equity used to mirror the paper `copy` portfolio. Default 1.0.
+  max_leverage: 3             # Max per-coin leverage set on the live account. Default 3.
+  margin_mode: isolated       # isolated or cross. Default isolated.
+  max_slippage_bps: 20        # Limit IOC price offset from mid. Default 20.
+  max_order_usd: 100          # Max notional of a single live order. Default 100.
+  max_total_exposure_usd: 1000  # Max total live gross exposure. Default 1000.
+  max_orders_per_poll: 10     # Max live orders per poll. Default 10.
+  daily_loss_stop_usd: 50     # Live-only daily loss stop in USD. Default 50.
