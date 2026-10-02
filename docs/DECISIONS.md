@@ -5,6 +5,69 @@ before CLAUDE.md is changed.
 
 ---
 
+## 2026-10-02 — Phase 2 (selection) decisions
+
+### D8. Copyability sim prices come from 1h candles — **adopted**
+`candleSnapshot` only serves the most recent ~5000 candles per interval: 15m candles reach back
+52 days, 1h candles 208 days. To cover the 90-day lookback with one request per coin (~58 weight,
+shared across all candidates), the sim uses 1h candles and interpolates linearly between each
+candle's open and close. This smooths moves inside an hour, so the late-entry check is a bit more
+lenient than it will be live. Funding is ignored in the selection sim (the Phase 3 backtest
+includes it). The sim starts flat, so positions held before the window are copied only once the
+trader trades that coin.
+
+### D9. Fills cache lives in GitHub Actions' cache, not on the `state` branch — **needs owner OK**
+D2 said "cache each wallet's fills on the `state` branch". Up to 150 wallets × up to 10,000
+fills, rewritten daily, would add tens of MB of git history every day. The cache is pure
+optimisation (losing it only makes one refresh slower), so it belongs in `actions/cache`
+(persists between runs, evicted after 7 days unused, never in git). Code: `state/fills_cache.py`
+writes `<data>/cache/fills/*.json.gz`; Phase 4 will gitignore `cache/` on the state branch and
+restore/save it with `actions/cache`.
+
+### D10. Trader returns are time-weighted (Modified Dietz) on total equity — **adopted**
+(refines D4, which the owner agreed.) The first real run showed two distortions:
+1. Measuring PnL against the account value 90 days ago ignores deposits: a trader who started
+   with $1M and deposited $15M had later PnL swings measured against $1M.
+2. Many large traders move money between spot and perps. The perp-only account value can swing
+   to ~0 while their total equity is $30–50M, which turned a $1M loss into "−52%".
+
+Method: chain per-interval returns `r = Δ perp PnL / (total account value at start + ½ × net
+deposits)`, where net deposits = Δ total account value − Δ total PnL. This is the standard
+Modified Dietz correction for flows at unknown times inside an interval (the all-time series has
+~weekly points). Intervals on a near-empty account (< $1,000) are skipped. `return_90d`,
+`max_drawdown_90d` and the copy sim's capture ratio use this index. The fills-based drawdown
+divides each fill's realized PnL by the total account value at that time.
+
+**Phase 3 consequence — needs owner OK:** §7.2 defines exposure fraction as position notional /
+`clearinghouseState.accountValue`, which is perp-only. For traders holding most of their capital
+in spot, that overstates their conviction (a $10M position looks like 500% of a $2M perp account
+when it's 25% of a $40M total). Proposal: divide by perp + spot equity (`spotClearinghouseState`,
+weight 2, valued at mids). The selection sim already uses total equity.
+
+### D11. "At most 2 replacements per day" limits additions — **adopted (interpretation)**
+§6.6 says a followed wallet stays while it ranks within 2N *and* passes all exclusions, and that
+at most 2 wallets are replaced per day. These conflict when more than 2 followed wallets fail on
+the same day. Resolution: wallets that fail an exclusion or fall outside the top 2N are always
+dropped (keeping an unsafe wallet is worse than an empty sleeve); the 2-per-day limit applies to
+*additions*. On the first refresh (nothing followed yet) up to N are added. The unused sleeves
+stay in cash.
+
+Fail safe (§0.3): a followed wallet we couldn't analyse because of *our* problem (API error,
+time budget) is kept, not dropped. Missing data never removes a trader.
+
+### D12. Smaller selection details — **adopted**
+- `pnl_90d ≤ 0` excludes a candidate at the cheap portfolio step (`not_profitable_90d`). Not a new
+  rule: such a wallet would fail `copy_capture_ratio ≥ 0.4` anyway; this just stops early.
+- Random control set (§6.7): besides the holding-time and trades-per-day rules, a drawn wallet
+  must not trade via sub-accounts and must have closed trades, otherwise "copying" it copies
+  nothing and the control is biased toward cash. At most 60 draws per month.
+- The refresh has a time budget (default 110 min). Wallets not reached are marked `skipped` and
+  treated like API errors for hysteresis.
+- Followed wallets are always re-analysed, even if they fall out of the top-150 pool.
+- Orchestration lives in `copybot/selection/refresh.py` (not listed in §4's layout).
+
+---
+
 ## 2026-10-02 — Phase 1 findings from the API probe
 
 ### D1. Leaderboard rows aggregate master wallets with their sub-accounts — **adopted 2026-10-02 (owner agreed)**

@@ -17,7 +17,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 COMMANDS = ("probe", "refresh", "poll", "report", "weekly", "backtest", "status", "kill", "unkill")
 NOT_YET = {
-    "refresh": 2,
     "poll": 3,
     "backtest": 3,
     "report": 5,
@@ -55,6 +54,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="path to config.yaml")
     p.add_argument("command", choices=COMMANDS)
     p.add_argument("--local", action="store_true", help="use local ./data state (no git)")
+    p.add_argument("--data-dir", default=str(REPO_ROOT / "data"), help="state directory")
+    p.add_argument("--limit", type=int, default=None, help="refresh: analyse at most N candidates")
+    p.add_argument("--no-cache", action="store_true", help="refresh: ignore the fills cache")
+    p.add_argument(
+        "--time-budget-min", type=float, default=110, help="refresh: stop analysing after this"
+    )
     return p
 
 
@@ -70,6 +75,22 @@ def main(argv: list[str] | None = None) -> int:
         from scripts.probe_api import run_probe
 
         return run_probe()
+
+    if args.command == "refresh":
+        from copybot.clock import SystemClock
+        from copybot.hl.client import InfoClient
+        from copybot.selection.refresh import Refresher
+
+        with InfoClient() as client:
+            Refresher(
+                cfg,
+                client,
+                SystemClock(),
+                Path(args.data_dir),
+                time_budget_s=args.time_budget_min * 60,
+                use_cache=not args.no_cache,
+            ).run(pool_limit=args.limit)
+        return 0
 
     log.error(
         "command %r is not implemented yet (planned for phase %d)",

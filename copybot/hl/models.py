@@ -280,6 +280,26 @@ class FundingHistory(RootModel[list[FundingRecord]]):
     pass
 
 
+# ---------- candleSnapshot ----------
+
+
+class Candle(_Model):
+    t: int  # open time ms
+    T: int  # close time ms
+    s: str
+    i: str
+    o: Dec
+    c: Dec
+    h: Dec
+    l: Dec  # noqa: E741  (API field name)
+    v: Dec
+    n: int
+
+
+class Candles(RootModel[list[Candle]]):
+    pass
+
+
 # ---------- leaderboard (stats-data, undocumented) ----------
 
 
