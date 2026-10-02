@@ -5,6 +5,45 @@ before CLAUDE.md is changed.
 
 ---
 
+## 2026-10-02 — Phase 2 threshold review (first full refresh: 0 qualified)
+
+### D13. Trades are exit episodes; capture is measured against an ideal copy — **adopted 2026-10-02 (owner agreed)**
+**Bug found and fixed first:** one order sweeping the book yields several fills with the same
+millisecond `time`, and their `tid` order isn't execution order. Sorting by `(time, tid)` broke
+the position chain on ~90% of fills, which zeroed round-trip counts for many wallets.
+`Fill.chrono_key` orders same-ms fills along the `startPosition` chain; chain mismatches over
+156k real fills fell to 0.25%.
+
+**What-if over the top 150 (by month PnL), after the fix** (`scripts/whatif_report.py`):
+
+| Rule set | Pass |
+|---|---|
+| Spec as written (round trips, capture vs trader return) | 0 |
+| Exit episodes instead of round trips | 1 |
+| + max drawdown 50% or 60% | 1 |
+| + min 10 trades | 1 |
+| + capture vs ideal copy | 1 |
+
+Of 150: 79 too active, 26 unprofitable over 90 days; of the 45 fully analysed, most are whales
+with a handful of very large trades. Relaxing thresholds doesn't help; the pool is the
+bottleneck (see D14).
+
+**Adopted:**
+1. A trade = an exit episode (FIFO lot matching; reducing fills clustered with < 1h gaps).
+   Round trips remain as diagnostic fields.
+2. `copy_capture_ratio` = lagged copy return / ideal copy return (same sizing and caps, copied
+   instantly at the trader's fill prices, no costs). The old trader-relative ratio penalised
+   traders for leverage we cap anyway; e.g. a trader at +1,488% with a +29% capped copy scored
+   0.02. Kept as `trader_capture_ratio`.
+3. Drawdown limit stays at 40%: relaxing it gained nothing.
+
+### D14. Rank the stage-2 pool by month ROI instead of month PnL — **experiment running**
+Ranking 2,596 stage-1 survivors by dollar PnL fills the pool with whales (huge accounts, few
+huge trades, or market makers). Ranking by ROI should favour skilled mid-sized traders. New
+config key `selection.pool_sort` (default `month_pnl` until the experiment is reviewed).
+
+---
+
 ## 2026-10-02 — Phase 2 (selection) decisions
 
 ### D8. Copyability sim prices come from 1h candles — **adopted**

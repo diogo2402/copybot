@@ -29,7 +29,7 @@ class Candidate:
 
 @dataclass(frozen=True)
 class Stage1Result:
-    survivors: list[Candidate]  # all stage-1 survivors, sorted by month PnL desc
+    survivors: list[Candidate]  # all stage-1 survivors, sorted by `pool_sort` desc
     pool: list[Candidate]  # top `stage2_pool` of survivors
     rejected: Counter[str]  # reason -> count
 
@@ -81,5 +81,8 @@ def stage1(rows: list[LeaderboardRow], cfg: SelectionConfig) -> Stage1Result:
             rejected[reason] += 1
         else:
             survivors.append(c)
-    survivors.sort(key=lambda c: (-c.month_pnl, c.address))
+    if cfg.pool_sort == "month_roi":
+        survivors.sort(key=lambda c: (-c.month_roi, c.address))
+    else:
+        survivors.sort(key=lambda c: (-c.month_pnl, c.address))
     return Stage1Result(survivors, survivors[: cfg.stage2_pool], rejected)

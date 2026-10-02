@@ -10,7 +10,8 @@ portfolio:
 
 selection:
   n_follow: 5                # Number of traders to follow (N). Default 5.
-  stage2_pool: 150           # Max stage-1 survivors (by month PnL) passed to deep analytics. Default 150.
+  stage2_pool: 150           # Max stage-1 survivors passed to deep analytics. Default 150.
+  pool_sort: month_pnl       # Rank stage-1 survivors for the pool by month_pnl (USD) or month_roi (%). Default month_pnl.
   lookback_days: 90          # Days of fills/portfolio history analysed per candidate. Default 90.
   min_account_value: 100000  # Min leaderboard accountValue in USD. Default 100000.
   min_month_volume: 1000000  # Min 30-day traded volume in USD (proves they actually trade). Default 1000000.

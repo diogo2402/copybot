@@ -201,11 +201,26 @@ class Refresher:
                 seed=c.address,
             )
             a._cr = cr
-            capture = cr.capture_ratio(pm.return_90d)
+            # Capture = lagged copy / instant cost-free copy with identical sizing (D13). This
+            # isolates what our polling lag costs; comparing with the trader's own return would
+            # instead penalise traders for using more leverage than our caps allow.
+            ideal = simulate_copy(
+                fills,
+                prices=prices,
+                trader_account_value=av_series,
+                cfg=self.cfg,
+                start_ms=self.start,
+                end_ms=self.now,
+                seed=c.address,
+                ideal=True,
+            )
+            capture = cr.copy_return / ideal.copy_return if ideal.copy_return > 0 else 0.0
             a.copy = {
                 "copy_return_90d": cr.copy_return,
                 "copy_max_drawdown": cr.copy_max_drawdown,
                 "copy_capture_ratio": capture,
+                "ideal_copy_return_90d": ideal.copy_return,
+                "trader_capture_ratio": cr.capture_ratio(pm.return_90d),
                 "n_orders": cr.n_orders,
                 "fees": cr.fees,
                 "avg_lag_cost_bps": cr.avg_lag_cost_bps,
@@ -229,23 +244,24 @@ class Refresher:
 
     def _fill_exclusion(self, fm: FillMetrics, full: bool) -> str | None:
         s = self.sel
-        if fm.trades_per_day > s.max_trades_per_day:
+        # Trades are FIFO exit episodes, not flat-to-flat round trips (D13).
+        if fm.episodes_per_day > s.max_trades_per_day:
             return "too_fast"
-        if fm.median_holding_hours is None:
+        if fm.median_hold_fifo_hours is None:
             return "insufficient_trades"
-        if fm.median_holding_hours < self.cfg.effective_min_holding_hours:
+        if fm.median_hold_fifo_hours < self.cfg.effective_min_holding_hours:
             return "holding_too_short"
         if not full:
             return None
         if fm.maker_ratio > s.max_maker_ratio:
             return "likely_market_maker"
-        if fm.top_trade_concentration > s.max_top_trade_concentration:
+        if fm.top_episode_concentration > s.max_top_trade_concentration:
             return "one_lucky_trade"
         if fm.active_days_last_30 < s.min_active_days_30:
             return "inactive"
         if fm.max_leverage > s.max_leverage_seen:
             return "leverage_too_high"
-        if fm.n_trades < s.min_round_trips:
+        if fm.n_episodes < s.min_round_trips:
             return "insufficient_trades"
         return None
 

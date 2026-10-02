@@ -156,3 +156,13 @@ def test_random_draw_is_deterministic_per_month() -> None:
 def test_scores_small_inputs(n: int) -> None:
     items = [_si("a", 0.1)][:n]
     assert len(composite_scores(items, WeightsConfig())) == n
+
+
+def test_stage1_pool_sorted_by_roi() -> None:
+    cfg = Config().selection.model_copy(update={"stage2_pool": 2, "pool_sort": "month_roi"})
+    rows = [
+        lb_row("0xwhale", month_pnl=900_000, month_roi=0.05),
+        lb_row("0xskilled", month_pnl=60_000, month_roi=0.40),
+        lb_row("0xmid", month_pnl=80_000, month_roi=0.20),
+    ]
+    assert [c.address for c in stage1(rows, cfg).pool] == ["0xskilled", "0xmid"]
