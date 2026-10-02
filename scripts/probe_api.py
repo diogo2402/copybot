@@ -27,6 +27,7 @@ from copybot.hl import client as hlc  # noqa: E402
 from copybot.hl.client import ApiError, InfoClient  # noqa: E402
 from copybot.hl.models import (  # noqa: E402
     AllMids,
+    Candles,
     ClearinghouseState,
     Fills,
     FundingHistory,
@@ -305,6 +306,25 @@ def run_probe() -> int:
             Fills,
             "userFillsByTime.json",
             lambda f: f"{len(f.root)} fills over 7d",
+        ),
+    )
+
+    attempt(
+        "candleSnapshot",
+        simple(
+            "candleSnapshot",
+            {
+                "type": "candleSnapshot",
+                "req": {
+                    "coin": "BTC",
+                    "interval": "1h",
+                    "startTime": now - 95 * DAY_MS,
+                    "endTime": now,
+                },
+            },
+            Candles,
+            "candles_BTC_1h.json",
+            lambda c: f"{len(c.root)} 1h candles, oldest {(now - c.root[0].t) / DAY_MS:.0f}d ago",
         ),
     )
 

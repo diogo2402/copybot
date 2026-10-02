@@ -205,6 +205,13 @@ class Fill(_Model):
     builderFee: Dec | None = None
     twapId: int | None = None
 
+    def chrono_key(self) -> tuple[int, str, Decimal, int]:
+        """Execution order. One order filling against many resting orders yields several fills
+        with the same millisecond `time`, and their `tid` order does NOT follow execution. The
+        position chain does: sells walk `startPosition` down, buys walk it up."""
+        chain = -self.startPosition if self.side == "A" else self.startPosition
+        return (self.time, self.coin, chain, self.tid)
+
     @property
     def signed_sz(self) -> Decimal:
         return self.sz if self.side == "B" else -self.sz
@@ -277,6 +284,26 @@ class FundingRecord(_Model):
 
 
 class FundingHistory(RootModel[list[FundingRecord]]):
+    pass
+
+
+# ---------- candleSnapshot ----------
+
+
+class Candle(_Model):
+    t: int  # open time ms
+    T: int  # close time ms
+    s: str
+    i: str
+    o: Dec
+    c: Dec
+    h: Dec
+    l: Dec  # noqa: E741  (API field name)
+    v: Dec
+    n: int
+
+
+class Candles(RootModel[list[Candle]]):
     pass
 
 

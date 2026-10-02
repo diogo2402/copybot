@@ -137,6 +137,7 @@ The `state` branch (checked out at `./data` in Actions) contains:
 state.json               # see §9.1
 shortlist.json           # today's followed wallets + their scores + full metrics
 candidates_latest.json   # full scored candidate table from the last refresh (for the report)
+cache/                   # gitignored; fills cache persisted via actions/cache (D9)
 logs/
   trades.jsonl           # every paper fill (all portfolios)
   signals.jsonl          # every detected trader change, acted on or skipped, with the reason
@@ -194,10 +195,10 @@ Keep a wallet only if **all** hold (all thresholds in `config.yaml`):
 - `allTime.pnl > 0`, `month.pnl > 0`, `month.roi > 0`
 - `month.vlm ≥ 1,000,000 USD` (actually trades) and `month.vlm / accountValue ≤ 200` (extreme turnover suggests a market maker/HFT)
 - Address not on `config.selection.blocklist`
-Sort survivors by `month.pnl` and keep the top 150 for stage 2 (configurable). This bounds API usage.
+Sort survivors by `selection.pool_sort` (`month_pnl` or `month_roi`; see D14) and keep the top 150 for stage 2 (configurable). This bounds API usage.
 
 ### 6.3 Stage 2 — deep analytics (per candidate, from fills + portfolio)
-Process each candidate **cheapest check first, stopping at the first exclusion** (D2): `portfolio` (drawdown, weekly consistency) → `subAccounts` → fills (paginated, at most `max_fill_pages` pages) → fills-based metrics → copyability simulation (§6.4) → `userRole` last. Cache each wallet's fills on the `state` branch and fetch only new fills on later days.
+Process each candidate **cheapest check first, stopping at the first exclusion** (D2): `portfolio` (drawdown, weekly consistency) → `subAccounts` → fills (paginated, at most `max_fill_pages` pages) → fills-based metrics → copyability simulation (§6.4) → `userRole` last. Cache each wallet's fills in `data/cache/fills/` and fetch only new fills on later days. The cache is persisted with `actions/cache`, **not** committed to the `state` branch (`cache/` is gitignored there); losing it only makes one refresh slower (D9).
 
 Additional exclusions from the API findings:
 - `subaccount_value_share` = sub-account equity / (master + sub-account equity) > `max_subaccount_value_share` (default 0.5) → reason `trades_via_subaccounts` (D1).
@@ -207,12 +208,12 @@ Additional exclusions from the API findings:
 `max_drawdown_90d` and weekly PnL come from the `perpMonth` series (last ~31 days) joined to `perpAllTime` (older, coarse); when fills cover the window, also build a fills-based equity curve and use the worse drawdown (D4).
 
 Compute:
-- `n_trades` (round trips, reconstructed from `startPosition`/`dir`) and `trades_per_day`.
-- `median_holding_hours` and `p25_holding_hours`.
+- `n_trades` and `trades_per_day`, where a **trade is an exit episode**: a cluster of position-reducing fills on one coin with gaps under 1 hour (D13). Flat-to-flat round trips are kept as diagnostics only; they miss traders who scale in and out without going flat. Same-millisecond fills are ordered by their `startPosition` chain, not `tid`.
+- `median_holding_hours` and `p25_holding_hours`: notional-weighted, from FIFO lot matching (each reduction consumes the oldest open size).
 - `maker_ratio` = share of fills with `crossed == false`.
 - `pnl_90d`, `max_drawdown_90d` (from portfolio history, as % of peak equity), `return_to_drawdown` = 90-day return / max drawdown.
 - `positive_weeks_ratio` = share of the last 12 weeks with positive PnL.
-- `top_trade_concentration` = largest single round-trip PnL / total positive PnL.
+- `top_trade_concentration` = largest single exit-episode PnL / total positive episode PnL.
 - `avg_leverage` (notional-weighted), `max_leverage` observed.
 - `n_coins` traded and `pct_volume_in_supported_coins` (perp coins in `meta`; we do not copy spot).
 - `active_days_last_30`.
@@ -226,12 +227,12 @@ Hard exclusions (configurable):
 - `positive_weeks_ratio < 0.5`
 - `active_days_last_30 < 8`
 - `max_leverage > 25`
-- fewer than 20 round trips in 90 days (not enough evidence)
+- fewer than 20 trades (exit episodes) in 90 days (not enough evidence)
 
 ### 6.4 Stage 3 — copyability simulation (the most important filter)
 For each survivor, replay their last 90 days of fills **as our bot would have seen them**: each fill becomes visible to us only at the next poll boundary after its timestamp (using the configured `poll_minutes` plus a random 0–3 min extra delay to mimic Actions jitter). Execute the copy at the historical mid price at that later moment (use the candle/fill data available; document the approximation in `docs/DECISIONS.md`) plus modelled fees and fixed slippage (`costs.backtest_slippage_bps`). Size with the §8.1 rules on a notional $10,000 sleeve.
 
-Outputs: `copy_return_90d`, `copy_max_drawdown`, `copy_capture_ratio` = copy_return / trader_return over the same period. Exclude if `copy_return_90d ≤ 0` or `copy_capture_ratio < 0.4`.
+Outputs: `copy_return_90d`, `copy_max_drawdown`, `copy_capture_ratio` = copy_return / ideal_copy_return, where the ideal copy uses identical sizing and caps but copies every fill instantly at the trader's own fill price with no fees or slippage (D13). This isolates the cost of our lag; dividing by the trader's own return would penalise traders for using more leverage than our caps allow. `trader_capture_ratio` (copy / trader return) is kept as a diagnostic. Exclude if `copy_return_90d ≤ 0` or `copy_capture_ratio < 0.4`.
 
 ### 6.5 Composite score
 Rank survivors by a weighted z-score (weights in config, defaults):
@@ -258,10 +259,10 @@ From the stage-1 survivors (not the final ranking), pick N random wallets with a
 
 ### 7.1 Inputs per followed wallet
 - Fills since `last_fill_time_ms` for that wallet (paginate; overlap the window by 60 s and de-duplicate by `tid`).
-- Current `clearinghouseState` snapshot.
+- Current `clearinghouseState` snapshot, plus `spotClearinghouseState` (weight 2) for the trader's spot equity.
 
 ### 7.2 Target-position logic
-The trader's **current snapshot is the target**; fills are used for timing, entry-price comparison and diagnostics. For each coin, compute the trader's *exposure fraction* = signed position notional / trader accountValue. Our target for that coin in that wallet's sleeve follows from §8.1.
+The trader's **current snapshot is the target**; fills are used for timing, entry-price comparison and diagnostics. For each coin, compute the trader's *exposure fraction* = signed position notional / trader **total equity** (perp `marginSummary.accountValue` + spot balances valued at mids). Many traders keep most capital in spot, so perp-only equity overstates their conviction (D10). If the spot request fails, skip the wallet this cycle (§7.3) rather than fall back to perp-only equity. Our target for that coin in that wallet's sleeve follows from §8.1.
 Changes are classified as: `OPEN`, `INCREASE`, `DECREASE`, `CLOSE`, `FLIP` (sign change → close then open).
 
 ### 7.3 Safety rules (fail safe)

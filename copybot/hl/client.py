@@ -23,6 +23,8 @@ from pydantic import BaseModel, RootModel, ValidationError
 from copybot import __version__
 from copybot.hl.models import (
     AllMids,
+    Candle,
+    Candles,
     ClearinghouseState,
     Fill,
     Fills,
@@ -50,6 +52,8 @@ HEAVY_TYPES = {"userRole": 60}
 DEFAULT_WEIGHT = 20
 ITEMS_PER_EXTRA_WEIGHT = 20  # userFills*/fundingHistory: +1 weight per 20 items returned
 ITEM_WEIGHTED_TYPES = {"userFills", "userFillsByTime", "fundingHistory"}
+CANDLE_ITEMS_PER_EXTRA_WEIGHT = 60
+CANDLE_CAP = 5000  # only the most recent ~5000 candles per interval are available
 
 FILLS_PAGE_CAP = 2000  # max fills per userFillsByTime response
 # Docs say only the 10k most recent fills are queryable; the probe observed ~39k (≈3.8 days for a
@@ -201,6 +205,8 @@ class InfoClient:
         if body["type"] in ITEM_WEIGHTED_TYPES and isinstance(parsed, RootModel):
             n = len(parsed.root)
             self.bucket.debit(n // ITEMS_PER_EXTRA_WEIGHT)
+        elif body["type"] == "candleSnapshot" and isinstance(parsed, RootModel):
+            self.bucket.debit(len(parsed.root) // CANDLE_ITEMS_PER_EXTRA_WEIGHT)
         return parsed
 
     # ---- typed endpoints ----
@@ -267,7 +273,7 @@ class InfoClient:
             cursor = max(f.time for f in page)
         else:
             raise FillsPageLimitError(f"userFillsByTime: exceeded {max_pages} pages for {user}")
-        out.sort(key=lambda f: (f.time, f.tid))
+        out.sort(key=Fill.chrono_key)
         return out
 
     def funding_history(
@@ -277,6 +283,13 @@ class InfoClient:
         if end_ms is not None:
             body["endTime"] = end_ms
         return self._info(FundingHistory, body).root
+
+    def candles(self, coin: str, interval: str, start_ms: int, end_ms: int) -> list[Candle]:
+        body = {
+            "type": "candleSnapshot",
+            "req": {"coin": coin, "interval": interval, "startTime": start_ms, "endTime": end_ms},
+        }
+        return self._info(Candles, body).root
 
     def leaderboard_raw(self) -> str:
         """Undocumented stats endpoint (GET, ~40 MB). Not subject to the info weight budget."""

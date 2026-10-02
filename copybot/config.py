@@ -36,6 +36,7 @@ class WeightsConfig(_Strict):
 class SelectionConfig(_Strict):
     n_follow: int = Field(5, ge=1)
     stage2_pool: int = Field(150, ge=1)
+    pool_sort: Literal["month_pnl", "month_roi"] = "month_pnl"
     lookback_days: int = Field(90, ge=7)
     min_account_value: Decimal = Decimal(100000)
     min_month_volume: Decimal = Decimal(1000000)
