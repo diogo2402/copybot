@@ -273,7 +273,7 @@ class InfoClient:
             cursor = max(f.time for f in page)
         else:
             raise FillsPageLimitError(f"userFillsByTime: exceeded {max_pages} pages for {user}")
-        out.sort(key=lambda f: (f.time, f.tid))
+        out.sort(key=Fill.chrono_key)
         return out
 
     def funding_history(

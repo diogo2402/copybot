@@ -87,9 +87,7 @@ def fetch_fills(
         )
         by_tid = {f.tid: f for f in cached.fills}
         by_tid.update({f.tid: f for f in new})
-        fills = sorted(
-            (f for f in by_tid.values() if f.time >= start_ms), key=lambda f: (f.time, f.tid)
-        )
+        fills = sorted((f for f in by_tid.values() if f.time >= start_ms), key=Fill.chrono_key)
         covered_from = max(cached.covered_from, start_ms)
         truncated = False
     else:

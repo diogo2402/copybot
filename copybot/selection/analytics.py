@@ -214,7 +214,7 @@ def round_trips(fills: list[Fill]) -> list[RoundTrip]:
         by_coin[f.coin].append(f)
     trips: list[RoundTrip] = []
     for coin, cf in by_coin.items():
-        cf.sort(key=lambda f: (f.time, f.tid))
+        cf.sort(key=Fill.chrono_key)
         cur: RoundTrip | None = None
         for f in cf:
             before = float(f.startPosition)
@@ -249,6 +249,95 @@ def round_trips(fills: list[Fill]) -> list[RoundTrip]:
     return trips
 
 
+# ---------------------------------------------------------------- exit episodes (FIFO)
+
+EPISODE_GAP_MS = HOUR_MS
+
+
+@dataclass
+class Episode:
+    """A cluster of position-reducing fills on one coin (gaps < 1h). This is a 'trade' for
+    traders who scale in and out without ever going flat, which round trips can't see."""
+
+    coin: str
+    start: int
+    end: int
+    pnl: float = 0.0
+    holds: list[tuple[float, float]] = field(default_factory=list)  # (hours, notional) pieces
+
+
+def exit_episodes(fills: list[Fill]) -> list[Episode]:
+    """FIFO lot matching per coin: increases add lots, reductions consume the oldest lots and
+    record how long that size was held. Each fill's `startPosition` is trusted; if our lots
+    disagree with it (history gap), they're replaced by one lot of unknown age."""
+    by_coin: dict[str, list[Fill]] = defaultdict(list)
+    for f in fills:
+        by_coin[f.coin].append(f)
+    out: list[Episode] = []
+    for coin, cf in by_coin.items():
+        cf.sort(key=Fill.chrono_key)
+        lots: list[list[float | None]] = []  # [open_time or None, size]
+        lot_sign = 0
+        cur: Episode | None = None
+        for f in cf:
+            before = float(f.startPosition)
+            after = before + float(f.signed_sz)
+            if abs(after) < 1e-12:
+                after = 0.0
+            sb = _sign(before)
+            held = sum(float(lot[1] or 0) for lot in lots)
+            if sb != lot_sign or abs(held - abs(before)) > 1e-9 * max(1.0, abs(before)):
+                lots = [[None, abs(before)]] if before else []
+                lot_sign = sb
+            px = float(f.px)
+            reduce = abs(before) if _sign(after) != sb else max(0.0, abs(before) - abs(after))
+            if reduce > 0:
+                if cur is None or cur.coin != coin or f.time - cur.end > EPISODE_GAP_MS:
+                    if cur is not None:
+                        out.append(cur)
+                    cur = Episode(coin, f.time, f.time)
+                cur.end = f.time
+                cur.pnl += float(f.closedPnl) - float(f.fee)
+                left = reduce
+                while left > 1e-12 and lots:
+                    t_open, size = lots[0]
+                    take = min(left, float(size or 0))
+                    if t_open is not None:
+                        cur.holds.append(((f.time - t_open) / HOUR_MS, take * px))
+                    lots[0][1] = float(size or 0) - take
+                    left -= take
+                    if (lots[0][1] or 0) <= 1e-12:
+                        lots.pop(0)
+            elif cur is not None and cur.coin == coin:
+                cur.pnl -= float(f.fee)  # opening fees count against the next episode
+            add = abs(after) if _sign(after) != sb else max(0.0, abs(after) - abs(before))
+            if add > 0:
+                if _sign(after) != lot_sign:
+                    lots = []
+                    lot_sign = _sign(after)
+                lots.append([float(f.time), add])
+            if after == 0:
+                lot_sign = 0
+        if cur is not None:
+            out.append(cur)
+    out.sort(key=lambda e: (e.end, e.coin))
+    return out
+
+
+def _weighted_quantile(pairs: list[tuple[float, float]], q: float) -> float | None:
+    pairs = [(v, w) for v, w in pairs if w > 0]
+    if not pairs:
+        return None
+    pairs.sort()
+    total = sum(w for _, w in pairs)
+    acc = 0.0
+    for v, w in pairs:
+        acc += w
+        if acc >= q * total:
+            return v
+    return pairs[-1][0]
+
+
 # ---------------------------------------------------------------- fill metrics
 
 
@@ -270,6 +359,12 @@ class FillMetrics:
     max_drawdown_fills: float
     history_truncated: bool
     coins: list[str] = field(default_factory=list)
+    # Episode/FIFO-based alternatives (see exit_episodes); evaluated in docs/DECISIONS.md D13.
+    n_episodes: int = 0
+    episodes_per_day: float = 0.0
+    median_hold_fifo_hours: float | None = None  # notional-weighted
+    p25_hold_fifo_hours: float | None = None
+    top_episode_concentration: float = 1.0
 
 
 def _quantile(xs: list[float], q: float) -> float | None:
@@ -291,9 +386,7 @@ def fill_metrics(
     history_truncated: bool = False,
 ) -> FillMetrics:
     start = now_ms - lookback_days * DAY_MS
-    perp = sorted(
-        (f for f in fills if f.is_perp and f.time >= start), key=lambda f: (f.time, f.tid)
-    )
+    perp = sorted((f for f in fills if f.is_perp and f.time >= start), key=Fill.chrono_key)
     trips = round_trips(perp)
     closed = [t for t in trips if t.closed_at is not None]
     holds = [h for t in closed if (h := t.holding_hours) is not None]
@@ -339,7 +432,17 @@ def fill_metrics(
         if f.time >= now_ms - 30 * DAY_MS:
             days_30.add(f.time // DAY_MS)
 
+    episodes = exit_episodes(perp)
+    pieces = [h for e in episodes for h in e.holds]
+    ep_pos = [e.pnl for e in episodes if e.pnl > 0]
+    ep_conc = max(ep_pos) / sum(ep_pos) if ep_pos else 1.0
+
     return FillMetrics(
+        n_episodes=len(episodes),
+        episodes_per_day=len(episodes) / lookback_days,
+        median_hold_fifo_hours=_weighted_quantile(pieces, 0.5),
+        p25_hold_fifo_hours=_weighted_quantile(pieces, 0.25),
+        top_episode_concentration=ep_conc,
         n_fills=len(perp),
         n_trades=len(closed),
         trades_per_day=len(closed) / lookback_days,

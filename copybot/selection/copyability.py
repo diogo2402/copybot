@@ -85,10 +85,14 @@ def simulate_copy(
     end_ms: int,
     seed: str,
     sleeve: float = 10_000.0,
+    ideal: bool = False,
 ) -> CopyResult:
+    """`ideal=True` is the no-lag, no-cost benchmark: every fill is copied the instant it
+    happens, at the trader's own fill price, with identical sizing and caps. Lagged return
+    divided by ideal return isolates what our polling lag costs (D13)."""
     poll_ms = cfg.schedule.poll_minutes * 60_000
-    slip = float(cfg.costs.backtest_slippage_bps) / 1e4
-    fee_rate = float(cfg.costs.taker_fee_bps) / 1e4
+    slip = 0.0 if ideal else float(cfg.costs.backtest_slippage_bps) / 1e4
+    fee_rate = 0.0 if ideal else float(cfg.costs.taker_fee_bps) / 1e4
     max_pos_frac = float(cfg.risk.max_position_pct) / 100
     rebalance_pct = float(cfg.signals.rebalance_threshold_pct) / 100
     rebalance_usd = float(cfg.signals.rebalance_threshold_usd)
@@ -100,7 +104,7 @@ def simulate_copy(
     for f in fills:
         if not (start_ms <= f.time <= end_ms) or f.coin not in prices:
             continue
-        k = math.floor(f.time / poll_ms) + 1
+        k = f.time if ideal else math.floor(f.time / poll_ms) + 1
         batches.setdefault(k, []).append(f)
 
     cash = sleeve
@@ -119,7 +123,10 @@ def simulate_copy(
                 total += q * px
         return total
 
-    events = sorted((k * poll_ms + jitter_ms(seed, k), k) for k in batches)
+    if ideal:
+        events = sorted((k, k) for k in batches)
+    else:
+        events = sorted((k * poll_ms + jitter_ms(seed, k), k) for k in batches)
     hour_marks = list(range(start_ms - start_ms % HOUR_MS + HOUR_MS, end_ms, HOUR_MS))
     hi = 0
     for t_vis, k in events:
@@ -127,7 +134,7 @@ def simulate_copy(
             if pos:
                 curve.append((hour_marks[hi], equity(hour_marks[hi])))
             hi += 1
-        batch = sorted(batches[k], key=lambda f: (f.time, f.tid))
+        batch = sorted(batches[k], key=Fill.chrono_key)
         last_by_coin: dict[str, Fill] = {}
         for f in batch:
             last_by_coin[f.coin] = f
@@ -137,7 +144,7 @@ def simulate_copy(
             continue
         eq = equity(t_vis)
         for coin, f in sorted(last_by_coin.items()):
-            px = prices[coin].at(t_vis)
+            px = float(f.px) if ideal else prices[coin].at(t_vis)
             if px is None or px <= 0:
                 skipped["no_price"] += 1
                 continue
@@ -164,7 +171,7 @@ def simulate_copy(
                     skipped["min_size"] += 1
                     continue
                 increasing = abs(target) > abs(cur) and (cur == 0 or (target > 0) == (cur > 0))
-                if increasing:
+                if increasing and not ideal:
                     trader_px = float(f.px)
                     drift = (px - trader_px) / trader_px * (1 if target > 0 else -1)
                     if drift > max_drift:

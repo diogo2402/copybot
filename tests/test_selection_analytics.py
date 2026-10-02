@@ -246,3 +246,67 @@ def test_looks_truncated() -> None:
     many = [fill(t=NOW - DAY_MS + i, start=0, sz=1, side="B") for i in range(8000)]
     assert looks_truncated(many, start, 2000)
     assert not looks_truncated(many[:100], start, 2000)
+
+
+# ------------------------------------------------------------ exit episodes (FIFO)
+
+
+def test_episodes_see_scaling_trader_that_never_goes_flat() -> None:
+    from copybot.selection.analytics import exit_episodes
+
+    t = NOW - 30 * DAY_MS
+    fills = [fill(t=t, start=0, sz=10, side="B")]
+    pos = 10.0
+    for k in range(1, 6):  # every 2 days: trim 2, then add 2 back; never flat
+        fills.append(fill(t=t + k * 48 * HOUR_MS, start=pos, sz=2, side="A", closed_pnl=5))
+        fills.append(fill(t=t + k * 48 * HOUR_MS + 2 * HOUR_MS, start=pos - 2, sz=2, side="B"))
+    assert round_trips(fills)[0].closed_at is None  # round trips see nothing closed
+    eps = exit_episodes(fills)
+    assert len(eps) == 5
+    # FIFO: the k-th trim consumes the original lot opened at t, held k*48h
+    assert [e.holds[0][0] for e in eps] == [48.0, 96.0, 144.0, 192.0, 240.0]
+    assert all(e.pnl == 5 for e in eps)
+
+
+def test_episodes_cluster_fills_within_an_hour() -> None:
+    from copybot.selection.analytics import exit_episodes
+
+    t = NOW - DAY_MS
+    fills = [fill(t=t, start=0, sz=3, side="B")]
+    fills += [fill(t=t + 5 * HOUR_MS + i * 60_000, start=3 - i, sz=1, side="A") for i in range(3)]
+    eps = exit_episodes(fills)
+    assert len(eps) == 1 and sum(h[1] for h in eps[0].holds) == 300.0
+
+
+def test_episodes_preexisting_position_has_no_hold_time() -> None:
+    from copybot.selection.analytics import exit_episodes
+
+    eps = exit_episodes([fill(t=NOW - DAY_MS, start=5, sz=5, side="A", closed_pnl=1)])
+    assert len(eps) == 1 and eps[0].holds == []
+
+
+def test_episode_metrics_in_fill_metrics() -> None:
+    fills = []
+    for i in range(20):
+        fills += trip("BTC", t_open=NOW - (40 - i) * DAY_MS, hours=6)
+    m = _metrics(fills)
+    assert m.n_episodes == 20
+    assert m.median_hold_fifo_hours == pytest.approx(6)
+    assert m.top_episode_concentration == pytest.approx(1 / 20)
+
+
+def test_same_millisecond_fills_follow_position_chain() -> None:
+    """Real API behaviour: one order sweeping the book yields several fills with the same
+    `time` whose `tid` order is not execution order."""
+    from copybot.hl.models import Fill
+
+    t = NOW - DAY_MS
+    sweep = [  # selling 10 from a long of 10, tids deliberately scrambled
+        fill(t=t, start=4, sz=4, side="A", tid=3),
+        fill(t=t, start=10, sz=3, side="A", tid=1),
+        fill(t=t, start=7, sz=3, side="A", tid=2),
+    ]
+    ordered = sorted(sweep, key=Fill.chrono_key)
+    assert [float(f.startPosition) for f in ordered] == [10, 7, 4]
+    trips = round_trips([fill(t=t - 5 * HOUR_MS, start=0, sz=10, side="B"), *sweep])
+    assert len(trips) == 1 and trips[0].holding_hours == pytest.approx(5)

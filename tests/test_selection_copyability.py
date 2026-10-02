@@ -140,3 +140,18 @@ def test_capture_ratio() -> None:
     r = sim([])
     assert r.capture_ratio(-0.1) == 0.0
     assert r.capture_ratio(0.1) == pytest.approx(0.0)
+
+
+def test_ideal_benchmark_beats_lagged_on_trend() -> None:
+    t = START + DAY_MS
+    up = lambda ts: 100 + max(0, ts - t) / HOUR_MS  # noqa: E731
+    fills = [
+        fill(t=t, start=0, sz=100, side="B", px=100),
+        fill(t=t + 48 * HOUR_MS, start=100, sz=100, side="A", px=148, closed_pnl=4800),
+    ]
+    lagged = sim(fills, price=up)
+    ideal = sim(fills, price=up, ideal=True)
+    # ideal: 10% of 10k at 100 -> 148, no costs = +4.8%
+    assert ideal.copy_return == pytest.approx(0.048, rel=1e-6)
+    assert 0 < lagged.copy_return < ideal.copy_return
+    assert ideal.fees == 0
