@@ -16,7 +16,7 @@ lenient than it will be live. Funding is ignored in the selection sim (the Phase
 includes it). The sim starts flat, so positions held before the window are copied only once the
 trader trades that coin.
 
-### D9. Fills cache lives in GitHub Actions' cache, not on the `state` branch — **needs owner OK**
+### D9. Fills cache lives in GitHub Actions' cache, not on the `state` branch — **adopted 2026-10-02 (owner agreed)**
 D2 said "cache each wallet's fills on the `state` branch". Up to 150 wallets × up to 10,000
 fills, rewritten daily, would add tens of MB of git history every day. The cache is pure
 optimisation (losing it only makes one refresh slower), so it belongs in `actions/cache`
@@ -38,7 +38,7 @@ Modified Dietz correction for flows at unknown times inside an interval (the all
 `max_drawdown_90d` and the copy sim's capture ratio use this index. The fills-based drawdown
 divides each fill's realized PnL by the total account value at that time.
 
-**Phase 3 consequence — needs owner OK:** §7.2 defines exposure fraction as position notional /
+**Phase 3 consequence — adopted 2026-10-02 (owner agreed), §7.1–7.2 updated:** §7.2 defines exposure fraction as position notional /
 `clearinghouseState.accountValue`, which is perp-only. For traders holding most of their capital
 in spot, that overstates their conviction (a $10M position looks like 500% of a $2M perp account
 when it's 25% of a $40M total). Proposal: divide by perp + spot equity (`spotClearinghouseState`,

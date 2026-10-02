@@ -137,6 +137,7 @@ The `state` branch (checked out at `./data` in Actions) contains:
 state.json               # see §9.1
 shortlist.json           # today's followed wallets + their scores + full metrics
 candidates_latest.json   # full scored candidate table from the last refresh (for the report)
+cache/                   # gitignored; fills cache persisted via actions/cache (D9)
 logs/
   trades.jsonl           # every paper fill (all portfolios)
   signals.jsonl          # every detected trader change, acted on or skipped, with the reason
@@ -197,7 +198,7 @@ Keep a wallet only if **all** hold (all thresholds in `config.yaml`):
 Sort survivors by `month.pnl` and keep the top 150 for stage 2 (configurable). This bounds API usage.
 
 ### 6.3 Stage 2 — deep analytics (per candidate, from fills + portfolio)
-Process each candidate **cheapest check first, stopping at the first exclusion** (D2): `portfolio` (drawdown, weekly consistency) → `subAccounts` → fills (paginated, at most `max_fill_pages` pages) → fills-based metrics → copyability simulation (§6.4) → `userRole` last. Cache each wallet's fills on the `state` branch and fetch only new fills on later days.
+Process each candidate **cheapest check first, stopping at the first exclusion** (D2): `portfolio` (drawdown, weekly consistency) → `subAccounts` → fills (paginated, at most `max_fill_pages` pages) → fills-based metrics → copyability simulation (§6.4) → `userRole` last. Cache each wallet's fills in `data/cache/fills/` and fetch only new fills on later days. The cache is persisted with `actions/cache`, **not** committed to the `state` branch (`cache/` is gitignored there); losing it only makes one refresh slower (D9).
 
 Additional exclusions from the API findings:
 - `subaccount_value_share` = sub-account equity / (master + sub-account equity) > `max_subaccount_value_share` (default 0.5) → reason `trades_via_subaccounts` (D1).
@@ -258,10 +259,10 @@ From the stage-1 survivors (not the final ranking), pick N random wallets with a
 
 ### 7.1 Inputs per followed wallet
 - Fills since `last_fill_time_ms` for that wallet (paginate; overlap the window by 60 s and de-duplicate by `tid`).
-- Current `clearinghouseState` snapshot.
+- Current `clearinghouseState` snapshot, plus `spotClearinghouseState` (weight 2) for the trader's spot equity.
 
 ### 7.2 Target-position logic
-The trader's **current snapshot is the target**; fills are used for timing, entry-price comparison and diagnostics. For each coin, compute the trader's *exposure fraction* = signed position notional / trader accountValue. Our target for that coin in that wallet's sleeve follows from §8.1.
+The trader's **current snapshot is the target**; fills are used for timing, entry-price comparison and diagnostics. For each coin, compute the trader's *exposure fraction* = signed position notional / trader **total equity** (perp `marginSummary.accountValue` + spot balances valued at mids). Many traders keep most capital in spot, so perp-only equity overstates their conviction (D10). If the spot request fails, skip the wallet this cycle (§7.3) rather than fall back to perp-only equity. Our target for that coin in that wallet's sleeve follows from §8.1.
 Changes are classified as: `OPEN`, `INCREASE`, `DECREASE`, `CLOSE`, `FLIP` (sign change → close then open).
 
 ### 7.3 Safety rules (fail safe)
